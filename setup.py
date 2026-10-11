@@ -10,7 +10,7 @@ requirements = [
 
 setup(
     name="netzeroai",
-    version="0.1.0",
+    version="1.0.0",
     description="AI-based framework for Net Zero readiness assessment",
     packages=find_packages(),
     install_requires=requirements,

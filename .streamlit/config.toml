@@ -1,0 +1,5 @@
+# Chart colors are validated against a light surface; keep the dashboard on the light theme.
+# Accent = the charts' series blue, so progress bars/sliders don't read as red "bad" signals.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"

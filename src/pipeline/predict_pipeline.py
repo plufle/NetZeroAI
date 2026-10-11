@@ -3,11 +3,16 @@ import sys
 import pandas as pd
 
 from src import constants as C
+from src.components.data_transformation import add_dimension_scores, assign_tiers, composite_score
 from src.exception import CustomException
 from src.logger import logging
-from src.utils import load_object
+from src.utils import indicator_bound_violations, load_object
 
 FEATURE_COLS = [f"{ind}_norm" for ind in C.INDICATOR_DIRECTIONS]
+
+
+class InvalidIndicatorInput(ValueError):
+    """Raw indicator values that are missing, non-finite or physically impossible."""
 
 
 class CustomCountryData:
@@ -38,25 +43,27 @@ class CustomCountryData:
 
 class PredictPipeline:
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        # Validated outside the try block so callers get InvalidIndicatorInput /
+        # FileNotFoundError with a readable message rather than a wrapped CustomException.
+        problems = indicator_bound_violations(df)
+        if problems:
+            raise InvalidIndicatorInput("Invalid indicator values - " + "; ".join(problems))
+        missing = [p.name for p in (C.PREPROCESSOR_PATH, C.MODEL_PATH) if not p.exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"Missing fitted artifacts {missing} in {C.ARTIFACTS_DIR}. "
+                "Build them with: python -m src.pipeline.train_pipeline"
+            )
+
         try:
             normalizer = load_object(C.PREPROCESSOR_PATH)
             model_bundle = load_object(C.MODEL_PATH)
 
-            df = normalizer.transform(df)
-
-            for name, cols in C.DIMENSIONS.items():
-                norm_cols = [f"{c}_norm" for c in cols]
-                df[f"{name}_score"] = df[norm_cols].mean(axis=1)
-
-            df["netzero_index_score"] = sum(
-                df[f"{d}_score"] * w for d, w in C.DIMENSION_WEIGHTS.items()
-            )
-            df["tier"] = pd.cut(
-                df["netzero_index_score"],
-                bins=normalizer.tier_bin_edges,
-                labels=C.TIER_LABELS,
-                include_lowest=True,
-            )
+            df = df.copy()
+            df[list(C.INDICATOR_DIRECTIONS)] = df[list(C.INDICATOR_DIRECTIONS)].astype(float)
+            df = add_dimension_scores(normalizer.transform(df))
+            df["netzero_index_score"] = composite_score(df)
+            df["tier"] = assign_tiers(df["netzero_index_score"], normalizer.tier_bin_edges)
 
             X = model_bundle["scaler"].transform(df[FEATURE_COLS])
             pca_coords = model_bundle["pca"].transform(X)

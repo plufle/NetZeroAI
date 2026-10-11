@@ -23,7 +23,7 @@ class ModelTrainer:
             X_test = scaler.transform(test_df[FEATURE_COLS])
 
             k_table = []
-            for k in range(2, 8):
+            for k in C.K_RANGE:
                 km = KMeans(n_clusters=k, n_init=10, random_state=C.RANDOM_STATE).fit(X_train)
                 k_table.append(
                     {"k": k, "inertia": km.inertia_, "silhouette": silhouette_score(X_train, km.labels_)}

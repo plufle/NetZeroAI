@@ -38,6 +38,31 @@ class PercentileNormalizer:
         return out
 
 
+def add_dimension_scores(df):
+    """Average each dimension's normalized indicators into `<dimension>_score`."""
+    df = df.copy()
+    for name, cols in C.DIMENSIONS.items():
+        df[f"{name}_score"] = df[[f"{c}_norm" for c in cols]].mean(axis=1)
+    return df
+
+
+def composite_score(df, weights=None):
+    """Weighted sum of dimension scores. `weights` defaults to the baseline
+    DIMENSION_WEIGHTS and is renormalized to sum to 1."""
+    weights = weights or C.DIMENSION_WEIGHTS
+    total = sum(weights.values())
+    return sum(df[f"{d}_score"] * (w / total) for d, w in weights.items())
+
+
+def assign_tiers(scores, bin_edges):
+    """Tier labels for scores using the training quartile edges. The outer bins are
+    opened to +/-inf so a new country scoring beyond the cohort's min/max still gets
+    the bottom/top tier."""
+    bins = np.array(bin_edges, dtype=float)
+    bins[0], bins[-1] = -np.inf, np.inf
+    return pd.cut(scores, bins=bins, labels=C.TIER_LABELS)
+
+
 class DataTransformation:
     def initiate_data_transformation(self, train_path, test_path):
         logging.info("Starting data transformation")
@@ -48,20 +73,10 @@ class DataTransformation:
             normalizer = PercentileNormalizer(C.INDICATOR_DIRECTIONS)
             normalizer.fit(train_df)
 
-            train_df = normalizer.transform(train_df)
-            test_df = normalizer.transform(test_df)
-
-            for name, cols in C.DIMENSIONS.items():
-                norm_cols = [f"{c}_norm" for c in cols]
-                train_df[f"{name}_score"] = train_df[norm_cols].mean(axis=1)
-                test_df[f"{name}_score"] = test_df[norm_cols].mean(axis=1)
-
-            train_df["netzero_index_score"] = sum(
-                train_df[f"{d}_score"] * w for d, w in C.DIMENSION_WEIGHTS.items()
-            )
-            test_df["netzero_index_score"] = sum(
-                test_df[f"{d}_score"] * w for d, w in C.DIMENSION_WEIGHTS.items()
-            )
+            train_df = add_dimension_scores(normalizer.transform(train_df))
+            test_df = add_dimension_scores(normalizer.transform(test_df))
+            train_df["netzero_index_score"] = composite_score(train_df)
+            test_df["netzero_index_score"] = composite_score(test_df)
 
             train_tiers, bin_edges = pd.qcut(
                 train_df["netzero_index_score"], q=4, labels=C.TIER_LABELS, retbins=True

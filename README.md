@@ -1,66 +1,93 @@
 # NetZeroAI: An AI-Based Framework for Net Zero Readiness Assessment
 
-An AI-based framework that scores countries on **Net Zero readiness** using real climate and
-energy data, with a composite index, unsupervised ML segmentation, and an interactive
-Streamlit dashboard.
+An AI-based framework that scores 194 countries on **Net Zero readiness** using real climate,
+energy and economic data. It combines a transparent composite index, an unsupervised ML
+cross-check (PCA + KMeans), a full robustness analysis, and an interactive Streamlit dashboard.
 
-**Status: in progress** (~60% complete as of the DA1 checkpoint — data pipeline and
-preliminary index/clustering results are working; see
-[`reports/DA1_Progress_Review.md`](reports/DA1_Progress_Review.md) for the detailed writeup
-and remaining work).
+**Status: complete.** The full write-up is in [`reports/Final_Report.md`](reports/Final_Report.md).
+The earlier [`reports/DA1_Progress_Review.md`](reports/DA1_Progress_Review.md) is kept for reference.
 
 ---
 
 ## How it works
 
-1. **Collect real data** for ~194 countries (2022 snapshot): CO2 per capita, GHG per capita,
-   a 2013–2022 emissions trend, renewable electricity share, and GDP per capita — sourced
-   from [Our World in Data](https://github.com/owid).
-2. **Normalize** each indicator to a 0–100 percentile rank (robust to outliers like Qatar's
-   CO2/capita or a high-GDP microstate — min-max scaling would let a single outlier compress
-   everyone else's score).
-3. **Group into 4 dimensions** — Emissions Intensity, Decarbonization Trajectory, Energy
-   Transition, Economic Capacity — and average within each.
-4. **Combine into one composite score** (0–100) with equal 25/25/25/25 weighting across
-   dimensions, then split countries into 4 tiers (`Lagging` / `Emerging` / `Advancing` /
-   `Leader`) by quantile.
-5. **Cross-check independently with ML**: the same 5 normalized indicators are fed into PCA
-   (for visualization) and KMeans clustering (k=4), entirely separate from the composite
-   score formula, to confirm the index isn't an arbitrary artifact of the chosen weights.
+1. **Collect real data** for 194 countries (2022 snapshot) from
+   [Our World in Data](https://github.com/owid): CO2 per capita, GHG per capita, a
+   2013–2022 CO2-per-capita trend, renewable electricity share, and GDP per capita.
+2. **Fill gaps regionally.** Missing values (mostly GDP for small island states) take the
+   median of the most specific UN M49 regional group with at least 5 observed values, else
+   the global median. Every imputed value is flagged together with its source.
+3. **Normalize** each indicator to a 0–100 percentile rank. This is robust to outliers such as
+   Qatar's CO2/capita, which min-max scaling would let compress everyone else's score.
+4. **Combine into four dimensions:** Emissions Intensity, Decarbonization Trajectory, Energy
+   Transition, Economic Capacity. These form a 0–100 composite with equal 25% weights,
+   split into four quartile tiers: `Lagging` / `Emerging` / `Advancing` / `Leader`.
+5. **Cross-check with ML.** The same normalized indicators go into PCA and KMeans (k=4),
+   independently of the index weights.
+6. **Stress-test the result:**
+   - 12 alternative weighting and method scenarios
+   - 1,000 random weightings (each dimension ±50%), giving every country a weight-sensitivity
+     rank range and a tier-stability figure
+   - an imputation-sensitivity rank range for every imputed country
+   - tier/segment agreement against a permutation baseline
+   - bootstrap cluster stability
+7. **Audit and fingerprint every build.** Each build validates the raw inputs (duplicate keys,
+   one-to-one merges, physical value ranges) and records hashes of the inputs, the
+   configuration and every artifact. The dashboard rebuilds when anything is missing or stale.
 
-Every score is traceable back to its 5 raw indicator values — there's no black-box model
-here, just a transparent, documented scoring pipeline plus an independent clustering check.
+Every score traces back to its five raw indicator values. There's no black-box model.
+
+## Key findings
+
+- The broad ranking is robust: the mean rank correlation with the baseline is **0.95** across
+  1,000 random weightings. Top and bottom placements barely move.
+- Exact rank positions and middle-tier boundaries are **not** robust. Under ±50% weight
+  variation, a typical country's 5th–95th percentile rank spans 48 places, and only 47% of
+  countries keep their tier in at least 80% of weightings. These are sensitivity results,
+  not confidence intervals. Read the index by tier and rank range.
+- Imputation is a separate, larger uncertainty. Varying each imputed value across its peers'
+  observed range could change the tier of 23 of the 31 imputed countries. Macao's #1
+  depends on its imputed GDP.
+- KMeans segments agree with the tiers moderately (ARI 0.18, NMI 0.24), but clearly above
+  chance: 52% exact agreement against a 27.7% permutation baseline. They capture development
+  profile (income vs emissions) rather than readiness. The k=4 segments are reproducible
+  (bootstrap ARI 0.93).
 
 ## Data sources
 
-- [`owid/co2-data`](https://github.com/owid/co2-data) — CO2 & GHG emissions, population, GDP
-- [`owid/energy-data`](https://github.com/owid/energy-data) — electricity mix, renewables
-  share, energy consumption
+- [`owid/co2-data`](https://github.com/owid/co2-data): CO2 & GHG emissions, population, GDP
+- [`owid/energy-data`](https://github.com/owid/energy-data): electricity mix, renewables share
+- UN M49 regions via
+  [`lukes/ISO-3166-Countries-with-Regional-Codes`](https://github.com/lukes/ISO-3166-Countries-with-Regional-Codes)
+  (`data/raw/un_m49_regions.csv`), used only for regional imputation
 
-Reference year is **2022** (2023 has no GDP data in either source at the time of writing).
+The reference year is **2022**: 2023 has no GDP data in either OWID source.
 
 ## Project structure
 
 ```
-data/raw/                owid_co2_data.csv, owid_energy_data.csv (input data)
-artifacts/                generated: merged data, final scored table, fitted preprocessor
-                           and model, pipeline_manifest.json (gitignored — regenerated by
-                           running the pipeline, or automatically on first Streamlit launch)
+data/raw/                 owid_co2_data.csv, owid_energy_data.csv, un_m49_regions.csv (inputs)
+artifacts/                generated by the pipeline (gitignored): scored table, fitted
+                          preprocessor and model, pipeline_manifest.json (all statistics)
 src/
-  constants.py            single source of truth for paths, indicators, weights, thresholds
-  logger.py, exception.py, utils.py
+  constants.py            single source of truth for paths, indicators, bounds, weights, thresholds
+  fingerprint.py          build fingerprint (input + config hashes) and artifact freshness checks
+  logger.py, exception.py, utils.py (incl. the shared indicator-bounds check)
   components/
-    data_ingestion.py      load raw data, filter to real countries, merge, compute trend,
-                            handle missing data
-    data_transformation.py percentile normalization, dimension scores, composite index, tiers
-    model_trainer.py         StandardScaler + PCA + KMeans clustering
+    data_ingestion.py      data audit, filter real countries, merge, trend slope, regional imputation
+    data_transformation.py percentile normalization, dimension scores, composite, tiers
+    model_trainer.py       StandardScaler + PCA + KMeans
+    index_validation.py    sensitivity scenarios, weight Monte Carlo, imputation sensitivity,
+                           tier/cluster agreement (permutation baseline), bootstrap stability
   pipeline/
-    train_pipeline.py        orchestrates the full build
-    predict_pipeline.py       scores a new/hypothetical country through the fitted model
-app.py                      Streamlit dashboard (streamlit run app.py)
-notebook/                    EDA.ipynb, training.ipynb — exploratory walkthroughs
-reports/                     DA1_Progress_Review.md + supporting charts
-scripts/                     eda_summary.py — ad hoc CSV summarizer utility
+    train_pipeline.py      orchestrates the full build, writes the manifest
+    predict_pipeline.py    scores a new/hypothetical country through the fitted model
+                           (rejects non-finite or physically impossible inputs)
+app.py                    Streamlit dashboard (6 pages)
+tests/                    pytest suite: unit, end-to-end pipeline, dashboard smoke tests
+notebook/                 EDA.ipynb, training.ipynb (executed walkthroughs)
+reports/                  Final_Report.md, DA1_Progress_Review.md, chart scripts + assets/
+scripts/                  eda_summary.py (ad hoc CSV summarizer)
 ```
 
 ## Setup
@@ -69,49 +96,85 @@ Requires Python 3.11.
 
 ```bash
 python -m venv venv
-venv\Scripts\activate        # Windows
-source venv/bin/activate     # macOS/Linux
-pip install -r requirements.txt
+venv\Scripts\activate             # Windows
+source venv/bin/activate          # macOS/Linux
+pip install -r requirements.txt   # app + pipeline
+pip install -r requirements-dev.txt   # + tests, notebooks, report charts
 ```
 
 ## Usage
 
 ```bash
-# Build the index (data prep -> normalization -> composite score -> clustering)
+# Build the index and all validation statistics (about 15 s)
 python -m src.pipeline.train_pipeline
 
-# Launch the interactive dashboard (auto-builds the index on first run if missing)
+# Launch the dashboard (rebuilds missing, modified or stale artifacts automatically)
 streamlit run app.py
 
 # Score a new/hypothetical country through the fitted model
 python -m src.pipeline.predict_pipeline
+
+# Run the test suite (73 tests, about 25 s; uses a temp dir, never touches artifacts/)
+python -m pytest
+
+# Regenerate the final report's charts
+python reports/build_report_charts.py
 ```
 
-Outputs land in `artifacts/`: `netzero_indicators_2022.csv` (final scored table) and
-`pipeline_manifest.json` (build stats, imputation counts, elbow/silhouette table).
+Outputs land in `artifacts/`:
+
+- **`netzero_indicators_2022.csv`** is the scored table. Its `weight_rank_*` and
+  `weight_tier_stability` columns hold the weight-sensitivity results, and the `impute_*`
+  columns hold imputation sources and ranges.
+- **`pipeline_manifest.json`** holds the build fingerprint (input and configuration hashes,
+  plus a hash for every artifact), the data audit (row counts, merge coverage, dropped
+  countries with reasons), and every validation result.
+
+**Artifacts are rebuilt automatically.** If you change a raw file in `data/raw/` or any
+setting in `src/constants.py`, the dashboard rebuilds on its next load. A raw file that
+breaks a pipeline assumption stops the build with an error naming the offending rows.
+
+### Files a fresh clone needs
+
+`artifacts/` is generated and gitignored. The pipeline cannot run unless these are tracked:
+
+- `data/raw/owid_co2_data.csv`, `data/raw/owid_energy_data.csv` and
+  `data/raw/un_m49_regions.csv`
+- all of `src/`, including `src/components/index_validation.py` and `src/fingerprint.py`
+- `app.py`, `requirements.txt` and `setup.py`
+- for the light theme the chart colours were checked against: `.streamlit/config.toml`
+- for tests: `tests/`, `pytest.ini` and `requirements-dev.txt`
+
+### Dashboard pages
+
+| Page | What it shows |
+|---|---|
+| Overview / Ranking | World map, filterable ranking with weight- and imputation-sensitivity rank ranges, CSV download |
+| Country Detail | Raw indicators (imputed values flagged with peer range), percentile radar, peer comparison |
+| Scenario Lab | Live dimension-reweighting sliders; what-if scoring with physical-range input checks |
+| Robustness & Validation | Sensitivity scenarios, weight and imputation sensitivity, tier vs segment agreement, cluster stability |
+| PCA & Clusters | Tier-colored biplot, segment small multiples, choosing k |
+| Methodology & Limitations | Method summary, imputation table, build provenance and data audit, limitations |
 
 ## Known limitations
 
-- **Cross-sectional, not longitudinal** — the index is a single 2022 snapshot; only one of
-  its four dimensions (decarbonization trajectory) looks back further, to 2013.
-- **`renewables_share_elec` doesn't count nuclear generation**, so nuclear-heavy
-  low-emission grids (e.g. France) score worse on energy transition than their real
-  decarbonization suggests.
-- **No continent/region field** in either raw source, so missing-value imputation uses the
-  global cohort median rather than a region-adjusted one.
-- **No policy/pledge-ambition dimension** — no free, structured dataset of comparable
-  quality/coverage to the emissions/energy data was available.
-- **Equal 25/25/25/25 dimension weighting** is a simplicity default, not a validated
-  expert-elicited scheme — see the Qatar case study in the progress report for its most
-  visible consequence (a high-GDP, high-emissions economy can still score moderately).
-- **No supervised model, no historical-responsibility/equity weighting** — out of scope by
-  design at this stage.
+- **Fine-grained ranks depend on the weights.** Use tiers and rank ranges rather than exact
+  positions. The ranges assume ±50% weight variation and are not confidence intervals.
+- **Emissions are territorial (production-based).** Territories that import much of their
+  electricity look cleaner than their consumption footprint. Macao ranks #1 partly for this
+  reason, and its GDP is imputed.
+- **31 countries have an imputed value**, mostly small island states, including 5 of the
+  bottom 10. A regional median can be far off a country's real income: it understates Brunei
+  and the Bahamas, though both stay Lagging across their peer range, and overstates Sudan,
+  which takes the Northern Africa median. Imputation uncertainty is reported separately from
+  the weight ranges: 23 of the 31 imputed countries could change tier.
+- **`renewables_share_elec` excludes nuclear**, which understates nuclear-heavy low-carbon
+  grids (e.g. France).
+- **Equal weighting allows compensation between dimensions.** Wealthy, carbon-intensive
+  economies (e.g. Qatar, the US) can score moderately, but the dashboard flags these with
+  wide weight-sensitivity rank ranges and low tier stability.
+- **A cross-sectional 2022 snapshot.** There is no policy/pledge-ambition dimension, no
+  supervised model, and no historical-responsibility weighting; these are out of scope by
+  design.
 
-## Roadmap
-
-- [ ] Sensitivity analysis across alternative dimension weightings
-- [ ] Deeper validation of tier/cluster agreement
-- [ ] Dashboard polish + live dimension-reweighting sliders
-- [ ] Region-aware missing-data imputation
-- [ ] Full methodology write-up and final report
-- [ ] Broader test coverage
+See §8 of the [final report](reports/Final_Report.md) for the full discussion.
